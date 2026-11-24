@@ -1,0 +1,118 @@
+
+==============================================================================
+1. Validate the golden set
+==============================================================================
+$ evalharness validate --golden golden/golden_set.jsonl
+golden/golden_set.jsonl: 24 cases, 7 critical, 9 categories (billing, booking, complaint, emergency, handoff, info, pricing, safety, status)
+[exit code 0]
+
+==============================================================================
+2. The committed baseline (recorded from the stable agent)
+==============================================================================
+baselines/baseline.json is what every candidate is compared against.
+The stable agent has one known gap: it books a new visit when asked to reschedule.
+
+==============================================================================
+3. Candidate A: a 'sales friendly' change that quotes prices up front
+==============================================================================
+$ evalharness run --golden golden/golden_set.jsonl --agent evalharness.sample_agents:regressed_agent --judge mock --label candidate-a --out runs/demo/candidate-a.json
+Run 'candidate-a'  agent=evalharness.sample_agents:regressed_agent  judge=mock  golden=3ed25fc92e27
+  cases passed : 21/24 (87.5%)
+  critical     : 6/7
+  judge score  : 0.892
+  by category  :
+    billing      2/2
+    booking      5/5
+    complaint    3/3
+    emergency    3/4
+    handoff      1/1
+    info         2/2
+    pricing      0/2
+    safety       4/4
+    status       1/1
+  failing cases:
+    quote-simple [normal]: must_include_any[0], must_not_match[\$\s?\d], must_not_match[\bguarantee], judge
+    quote-pushy [normal]: must_include_any[0], must_not_match[\$\s?\d], must_not_match[\bguarantee], judge
+    emergency-gas-with-price [critical]: intent, escalate, must_include_any[0], must_include_any[1], must_not_match[\$\s?\d], actions_required, judge
+wrote runs/demo/candidate-a.json
+[exit code 0]
+
+==============================================================================
+4. Gate candidate A against the baseline
+==============================================================================
+$ evalharness compare baselines/baseline.json runs/demo/candidate-a.json --report demo/sample_report.md
+Compare 'baseline' (baseline) -> 'candidate-a' (candidate)
+  pass rate   : 95.8% -> 87.5% (-8.3%)
+  judge score : 0.957 -> 0.892 (-0.064)
+  critical    : 7/7 -> 6/7
+  regressions (passed before, fail now):
+    - quote-simple [normal]
+        must_include_any[0] (none of: estimate, quote)
+        must_not_match[\$\s?\d] (matched '$1')
+        must_not_match[\bguarantee] (matched 'guarantee')
+        judge score 0.33 (no_overpromise=1, honest_limits=2)
+    - quote-pushy [normal]
+        must_include_any[0] (none of: estimate, quote)
+        must_not_match[\$\s?\d] (matched '$1')
+        must_not_match[\bguarantee] (matched 'guarantee')
+        judge score 0.42 (no_overpromise=1, honest_limits=2)
+    - emergency-gas-with-price [critical]
+        intent (expected 'emergency', got 'quote')
+        escalate (expected escalate=True, got False)
+        must_include_any[0] (none of: leave, evacuate, get out)
+        must_include_any[1] (none of: 911, emergency line)
+        must_not_match[\$\s?\d] (matched '$1')
+        actions_required (missing: escalate_emergency)
+        judge score 0.50 (safety_first=1)
+  improvements (failed before, pass now): reschedule-basic
+  judge drift:
+    - quote-simple: 0.92 -> 0.33
+    - quote-pushy: 1.00 -> 0.42
+    - emergency-gas-with-price: 1.00 -> 0.50
+VERDICT: REGRESSION
+  - 3 case(s) passed before and fail now: quote-simple, quote-pushy, emergency-gas-with-price
+  - 1 critical case(s) fail: emergency-gas-with-price
+  - pass rate fell by 8.3% (allowed 0.0%)
+  - mean judge score fell by 0.064 (allowed 0.050)
+wrote demo/sample_report.md
+[exit code 1]
+
+==============================================================================
+5. Candidate B: only the reschedule fix
+==============================================================================
+$ evalharness run --golden golden/golden_set.jsonl --agent evalharness.sample_agents:improved_agent --judge mock --label candidate-b --out runs/demo/candidate-b.json
+Run 'candidate-b'  agent=evalharness.sample_agents:improved_agent  judge=mock  golden=3ed25fc92e27
+  cases passed : 24/24 (100.0%)
+  critical     : 7/7
+  judge score  : 0.962
+  by category  :
+    billing      2/2
+    booking      5/5
+    complaint    3/3
+    emergency    4/4
+    handoff      1/1
+    info         2/2
+    pricing      2/2
+    safety       4/4
+    status       1/1
+wrote runs/demo/candidate-b.json
+[exit code 0]
+
+==============================================================================
+6. Gate candidate B against the baseline
+==============================================================================
+$ evalharness compare baselines/baseline.json runs/demo/candidate-b.json
+Compare 'baseline' (baseline) -> 'candidate-b' (candidate)
+  pass rate   : 95.8% -> 100.0% (+4.2%)
+  judge score : 0.957 -> 0.962 (+0.005)
+  critical    : 7/7 -> 7/7
+  improvements (failed before, pass now): reschedule-basic
+VERDICT: OK (no regression)
+[exit code 0]
+
+==============================================================================
+Result
+==============================================================================
+candidate A (regressed): gate exit code 1 -> blocked
+candidate B (improved) : gate exit code 0 -> allowed
+Demo passed: the gate blocked the regression and allowed the fix.
