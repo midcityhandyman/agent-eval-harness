@@ -109,6 +109,12 @@ def compare_runs(
             f"the runs used different judges ({baseline.get('judge')} vs {candidate.get('judge')}), "
             "so judge scores are not comparable"
         )
+    marks = (baseline.get("judge_pass_mark"), candidate.get("judge_pass_mark"))
+    if marks[0] != marks[1]:
+        result.warnings.append(
+            f"the runs used different judge pass marks ({marks[0]} vs {marks[1]}), "
+            "so a case can pass or fail without the reply changing"
+        )
     judge_errors = candidate["summary"].get("judge_errors", 0)
     if judge_errors:
         result.warnings.append(f"the judge errored on {judge_errors} candidate case(s)")

@@ -156,3 +156,14 @@ def test_reports_render_verdict_and_tables(golden_cases):
     good = compare_runs(run(stable_agent, "baseline"), run(improved_agent, "improved"))
     assert "**Verdict: OK**" in render_comparison_markdown(good)
     assert "VERDICT: OK" in render_comparison_text(good)
+
+
+def test_different_judge_pass_marks_are_flagged():
+    base = make_run("base", [case("one", judge=0.7)])
+    cand = make_run("cand", [case("one", judge=0.7)])
+    assert not compare_runs(base, cand).warnings
+    cand["judge_pass_mark"] = 0.4
+    result = compare_runs(base, cand)
+    assert any("judge pass marks (0.6 vs 0.4)" in w for w in result.warnings)
+    assert "judge pass marks" in render_comparison_text(result)
+    assert "judge pass marks" in render_comparison_markdown(result)

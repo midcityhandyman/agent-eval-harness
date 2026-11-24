@@ -97,6 +97,7 @@ def test_claude_judge_parses_structured_scores(make_case):
     call = client.calls[0]
     assert call["model"] == "test-model"
     assert call["output_config"]["format"]["type"] == "json_schema"
+    assert call["max_tokens"] >= 16000  # room for thinking plus the JSON verdict
     sent = json.loads(call["messages"][0]["content"])
     assert sent["customer_message"] == case.message
     assert set(sent["criteria"]) == {"empathy", "concise"}
@@ -112,6 +113,7 @@ def test_claude_judge_skips_the_call_when_there_is_no_rubric(make_case):
     "client, message",
     [
         (FakeClient({"scores": [], "rationale": ""}, stop_reason="refusal"), "declined"),
+        (FakeClient({"scores": [], "rationale": ""}, stop_reason="max_tokens"), "cut off"),
         (FakeClient("{not json"), "could not parse"),
         (FakeClient({"scores": [{"criterion": "empathy", "score": 3}], "rationale": ""}), "skipped"),
         (FakeClient(None), "no text block"),

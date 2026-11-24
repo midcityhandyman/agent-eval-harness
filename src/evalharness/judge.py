@@ -199,7 +199,9 @@ class ClaudeJudge:
         try:
             response = self._client.beta.messages.create(
                 model=self.model,
-                max_tokens=4000,
+                # Thinking cannot be switched off on the default model and counts
+                # against this cap, so leave room: a cut-off reply is a judge error.
+                max_tokens=16000,
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
                 system=JUDGE_SYSTEM_PROMPT,

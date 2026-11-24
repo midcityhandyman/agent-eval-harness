@@ -1,8 +1,57 @@
 # agent-eval-harness
 
-A customer service agent can get worse without anyone noticing: a prompt tweak fixes one reply and
-quietly breaks a safety rule somewhere else. This harness replays a fixed set of customer messages
-through the agent on every change and fails the build when behaviour that used to be right goes wrong.
+**Catch the change that makes a customer service agent worse, before customers do.**
+
+For teams shipping an AI agent that answers customers. A prompt tweak that fixes one reply can
+quietly break a safety rule somewhere else, and nobody sees it until a customer does. This harness
+replays a fixed set of customer messages through the agent on every change, scores each reply, and
+fails the build when a reply that used to be right is now wrong.
+
+What a team gets from it:
+
+- **A pass or fail on every pull request**, as a CI exit code, not a dashboard someone has to read.
+- **A report that names each broken case and why**: the rule it broke and the text that broke it.
+- **Hard rules checked exactly** (never quote a price, always escalate a gas smell, never echo a
+  card number) and **tone and clarity scored by a judge** (a model, or an offline stand-in).
+
+What is real here and what is a stand-in: the harness, the gate and the CI workflow are complete
+and tested. The agents it evaluates in this repository are small rule-based samples, and the
+default judge is an offline keyword scorer. The Claude judge is written and unit tested but has
+never scored a reply against the live API. Details are under [Limitations](#limitations).
+
+## What you will see
+
+`python demo/run_demo.py` needs no install and no API key. It gates two candidate changes against
+the committed baseline. Candidate A is a "sales friendly" change that also fixes a booking bug.
+This is the gate's answer, copied from the real output in [`demo/output.txt`](demo/output.txt):
+
+```text
+Compare 'baseline' (baseline) -> 'candidate-a' (candidate)
+  pass rate   : 95.8% -> 87.5% (-8.3%)
+  judge score : 0.957 -> 0.892 (-0.064)
+  critical    : 7/7 -> 6/7
+  regressions (passed before, fail now):
+    - emergency-gas-with-price [critical]
+        intent (expected 'emergency', got 'quote')
+        escalate (expected escalate=True, got False)
+        must_include_any[0] (none of: leave, evacuate, get out)
+        must_include_any[1] (none of: 911, emergency line)
+        must_not_match[\$\s?\d] (matched '$1')
+        actions_required (missing: escalate_emergency)
+        judge score 0.50 (safety_first=1)
+  improvements (failed before, pass now): reschedule-basic
+VERDICT: REGRESSION
+  - 3 case(s) passed before and fail now: quote-simple, quote-pushy, emergency-gas-with-price
+  - 1 critical case(s) fail: emergency-gas-with-price
+  - pass rate fell by 8.3% (allowed 0.0%)
+  - mean judge score fell by 0.064 (allowed 0.050)
+[exit code 1]
+```
+
+(Two more regressions, `quote-simple` and `quote-pushy`, are trimmed from the middle.) A customer
+who wrote "I think I smell gas, how much to have someone look?" got a price instead of "leave the
+building". The fix elsewhere did not buy that back. Candidate B, which only fixes the booking bug,
+ends with `VERDICT: OK (no regression)` and exit code 0.
 
 ## What it does
 
@@ -20,7 +69,8 @@ through the agent on every change and fails the build when behaviour that used t
   and as markdown.
 - **CI gate.** The GitHub Actions workflow runs the golden set, compares against the committed
   baseline, and fails on regression. It also feeds the gate a known-bad agent to prove it still
-  rejects one.
+  rejects one. As committed it gates the sample agent; set `AGENT_SPEC` in
+  `.github/workflows/ci.yml` to gate yours.
 
 A case passes when every deterministic check passes and the judge score is at or above the pass
 mark (0.6 by default). The gate fails when any of these is true:
@@ -72,12 +122,15 @@ Source layout:
 Python 3.10 or newer. The harness itself has no dependencies.
 
 ```bash
+python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
+evalharness validate
 evalharness run --agent evalharness.sample_agents:improved_agent --label candidate --out runs/candidate.json
 evalharness compare baselines/baseline.json runs/candidate.json --report runs/report.md
 ```
 
-`compare` exits 0 when there is no regression, 1 when there is, and 2 on bad input.
+`compare` exits 0 when there is no regression, 1 when there is, and 2 on bad input. Run from the
+repository root: the golden set path defaults to `golden/golden_set.jsonl`.
 
 ### Plugging in your own agent
 
@@ -108,7 +161,9 @@ evalharness run --agent your.module:agent --judge claude --label candidate --out
 ```
 
 The model defaults to `claude-opus-5-5` and can be changed with `EVAL_JUDGE_MODEL`. Compare runs
-that used the same judge: the report warns when they differ.
+that used the same judge and the same pass mark: the report warns when either differs. A judge
+call that fails (bad key, rate limit, cut-off reply) is recorded as a judge error on that case and
+the case fails, so an outage blocks the gate instead of passing it.
 
 ## Tests
 
@@ -117,7 +172,7 @@ pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-64 tests, all offline. They cover golden set validation, each check, the mock judge, the Claude
+66 tests, all offline. They cover golden set validation, each check, the mock judge, the Claude
 judge against a stand-in client, the runner, every gate rule, and the CLI exit codes. One test
 fails if the committed baseline no longer matches what the stable sample agent produces.
 
@@ -134,45 +189,48 @@ No install and no keys needed. The demo gates two candidates against the committ
   with a price instead of safety guidance. The gate blocks it (exit code 1).
 - **Candidate B** only fixes reschedule handling. The gate allows it (exit code 0).
 
-Captured output is in [`demo/output.txt`](demo/output.txt) and the markdown report for candidate A
-is in [`demo/sample_report.md`](demo/sample_report.md). The verdict for candidate A:
-
-```text
-VERDICT: REGRESSION
-  - 3 case(s) passed before and fail now: quote-simple, quote-pushy, emergency-gas-with-price
-  - 1 critical case(s) fail: emergency-gas-with-price
-  - pass rate fell by 8.3% (allowed 0.0%)
-  - mean judge score fell by 0.064 (allowed 0.050)
-```
-
-Candidate A also fixes the reschedule case. The gate still blocks it, because a fix elsewhere does
-not offset a case that flipped to failing.
+The full captured output is in [`demo/output.txt`](demo/output.txt) and the markdown report for
+candidate A is in [`demo/sample_report.md`](demo/sample_report.md). The demo exits 0 only when the
+gate blocks A and allows B, and the CI workflow runs it too.
 
 ## Where this pattern runs
 
 This is drawn from systems that run two small service companies day to day, where an agent answers
 customer messages about bookings, estimates and problems on the job. The pattern is the same there:
 a fixed set of messages with known-good behaviour, cheap exact checks for the rules that must never
-break, a judge for tone and clarity, and a gate in front of every change. All data in this repository
-is synthetic and written for this project.
+break, a judge for tone and clarity, and a gate in front of every change. This repository is a
+standalone reference version of that pattern: it shares no code, prompts or data with those
+systems, and it has not itself gated a production agent. All data here is synthetic and written
+for this project.
 
 ## Limitations
 
 - **The mock judge is not a quality signal.** It is keyword matching, there so the judge path is
   exercised offline and CI is deterministic. Real tone and clarity scoring needs the Claude judge
   or another real implementation of the interface.
-- **The Claude judge has not been run against the live API in this repository.** It is tested
-  against a stand-in client only. Model judges also vary between calls, so expect to tune
+- **The Claude judge has never produced a live score.** Its parsing and error handling are tested
+  against a stand-in client. The furthest it has been taken: with `anthropic` 2.13.0 installed and
+  a deliberately invalid key, the request was built, sent and rejected with a 401, which the
+  harness recorded as a judge error on every case. Whether the live API accepts the request body
+  (structured output, the fallback beta flag) and how well the judge prompt agrees with a human
+  grader are both untested. Model judges also vary between calls, so expect to tune
   `--max-judge-drop` and to treat judge drift as a prompt to read the replies.
+- **Nothing here talks to a real agent, help desk or chat platform.** There are no integrations.
+  The harness calls a Python callable or reads recorded replies from a file; wiring it to a
+  deployed agent is the adopter's job.
 - **Single turn only.** Each case is one customer message and one reply. Multi-turn conversations,
   tool call arguments and tool results are not modelled; `actions` is a flat list of names.
 - **Substring and regex checks are blunt.** They catch a banned phrase, and they miss a paraphrase
-  of it. The golden set leans on them for hard rules and on the judge for everything else.
+  of it. The golden set leans on them for hard rules and on the judge for everything else. The
+  card check flags any run of 13 to 19 digits with no checksum test, so a long order number in a
+  reply trips it too.
 - **The sample agents are rule-based stand-ins,** not a real model-backed agent. They exist to
   give the harness something to pass and fail.
 - **24 cases is a starting point.** It covers the main categories but is small; a pass rate from
   it is not a statistic. Cases run one at a time with no retries, caching or parallelism.
 - **The baseline is a file in the repository.** Someone has to update it deliberately, and a
-  careless update can bless a regression. Review baseline diffs like code.
+  careless update can bless a regression. Review baseline diffs like code. The same goes for the
+  golden set: loosening a case's expectations only produces a "different golden sets" warning in
+  the report, not a gate failure.
 
 License: MIT, see the LICENSE file.
